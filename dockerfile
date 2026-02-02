@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     libcupsimage2 \
     avahi-daemon \
+    mkdir -p /drivers_to_install \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Expose the CUPS web interface
@@ -28,12 +29,12 @@ COPY entrypoint.sh $APP_DIR/entrypoint.sh
 COPY app/templates /app/templates
 
 # Copy and install the SEWOO drivers
-COPY drivers/SEWOO/sewoocupsinstall_amd64.tar.gz $DRIVER_ARCHIVE
-RUN tar -zxvf $DRIVER_ARCHIVE -C /tmp && \
-    cd $DRIVER_TMP_DIR && \
-    chmod +x setup.sh && \
-    sh setup.sh && \
-    rm -rf $DRIVER_TMP_DIR $DRIVER_ARCHIVE
+#COPY drivers/SEWOO/sewoocupsinstall_amd64.tar.gz $DRIVER_ARCHIVE
+#RUN tar -zxvf $DRIVER_ARCHIVE -C /tmp && \
+#    cd $DRIVER_TMP_DIR && \
+#    chmod +x setup.sh && \
+#    sh setup.sh && \
+#   rm -rf $DRIVER_TMP_DIR $DRIVER_ARCHIVE
 
 # Ensure permissions are correct
 RUN chmod 644 $APP_DIR/cupsd.conf && chmod +x $APP_DIR/entrypoint.sh

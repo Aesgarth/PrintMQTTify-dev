@@ -7,153 +7,154 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import mm
 import json
 
-# Read broker, username, and password from environment variables
+# Read configurations
 broker = os.getenv("MQTT_BROKER", "localhost")
 username = os.getenv("MQTT_USERNAME")
 password = os.getenv("MQTT_PASSWORD")
 topic = os.getenv("MQTT_TOPIC", "printer/commands")
 availability_topic = "printer/availability"
+ha_discovery_enabled = os.getenv("HA_DISCOVERY", "true").lower() == "true"
 
+# Discovery Constants
+DISCOVERY_PREFIX = "homeassistant"
+DEVICE_ID = "printmqttify_bridge"
+
+def publish_ha_discovery(client):
+    """Publishes MQTT Discovery configs for Home Assistant."""
+    device_info = {
+        "identifiers": [DEVICE_ID],
+        "name": "PrintMQTTify",
+        "model": "Thermal Printer Bridge",
+        "manufacturer": "PrintMQTTify"
+    }
+
+    # 1. Status Sensor (Binary or Sensor)
+    sensor_config = {
+        "name": "Printer Connectivity",
+        "state_topic": availability_topic,
+        "unique_id": f"{DEVICE_ID}_status",
+        "device": device_info,
+        "icon": "mdi:printer"
+    }
+    
+    # 2. Text Entity for Notifications
+    text_config = {
+        "name": "Printer Notification",
+        "command_topic": topic,
+        "unique_id": f"{DEVICE_ID}_notify",
+        "device": device_info,
+        "icon": "mdi:message-text-outline"
+    }
+
+    client.publish(f"{DISCOVERY_PREFIX}/sensor/{DEVICE_ID}/status/config", json.dumps(sensor_config), retain=True)
+    client.publish(f"{DISCOVERY_PREFIX}/text/{DEVICE_ID}/notify/config", json.dumps(text_config), retain=True)
+    print("HA Discovery payloads published.")
+
+def remove_ha_discovery(client):
+    """Sends empty payloads to remove entities from HA."""
+    client.publish(f"{DISCOVERY_PREFIX}/sensor/{DEVICE_ID}/status/config", "", retain=True)
+    client.publish(f"{DISCOVERY_PREFIX}/text/{DEVICE_ID}/notify/config", "", retain=True)
+    print("HA Discovery payloads cleared.")
 
 def publish_availability(client, interval=60):
-    """Publish printer availability periodically."""
     def publish_status():
         while True:
             try:
-                # Check if the printer is available
                 result = subprocess.run(["lpstat", "-p"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                status = "online" if "idle" in result.stdout else "offline"
-            except Exception as e:
-                print(f"Error checking printer status: {e}")
+                status = "online" if "idle" in result.stdout or "is ready" in result.stdout else "offline"
+            except Exception:
                 status = "offline"
-
-            # Debug log and publish the status
-            print(f"Publishing status: {status}")
-            client.publish(availability_topic, str(status), qos=1, retain=True)
+            client.publish(availability_topic, status, qos=1, retain=True)
             time.sleep(interval)
 
     thread = threading.Thread(target=publish_status, daemon=True)
     thread.start()
 
-
 def on_connect(client, userdata, flags, rc):
-    """Callback for when the client connects to the MQTT broker."""
     if rc == 0:
         print("Connected to MQTT broker!")
         client.subscribe(topic)
-        # Start publishing availability
+        client.subscribe("printer/discovery/control") # Topic for web panel toggle
         publish_availability(client)
+        if ha_discovery_enabled:
+            publish_ha_discovery(client)
     else:
         print(f"Failed to connect, return code {rc}")
 
-
-
 def on_message(client, userdata, msg):
-    """Callback for when a message is received."""
-    print(f"Received message: {msg.payload.decode()} on topic {msg.topic}")
+    payload_str = msg.payload.decode()
+    
+    # Handle internal toggle from web panel
+    if msg.topic == "printer/discovery/control":
+        if payload_str == "ON":
+            publish_ha_discovery(client)
+        else:
+            remove_ha_discovery(client)
+        return
+
+    print(f"Received print request: {payload_str}")
     try:
-        payload = json.loads(msg.payload.decode())
-        print(f"Parsed payload: {payload}")
-        printer_name = payload.get("printer_name")
-        title = payload.get("title", "Print Job")
-        message = payload.get("message", "No message provided")
+        # Try to parse as JSON first
+        try:
+            data = json.loads(payload_str)
+            printer_name = data.get("printer_name", os.getenv("DEFAULT_PRINTER", "default"))
+            title = data.get("title", "MQTT Notification")
+            message = data.get("message", "No message content")
+        except json.JSONDecodeError:
+            # If not JSON, assume it's a raw string from HA Text Entity
+            printer_name = os.getenv("DEFAULT_PRINTER", "default")
+            title = "HA Notification"
+            message = payload_str
 
-        if not printer_name:
-            raise ValueError("Missing 'printer_name' in payload")
-
-        # Generate a formatted PDF
         pdf_path = generate_pdf(title, message)
+        if pdf_path:
+            send_to_printer(printer_name, pdf_path)
 
-        # Send the PDF to the printer
-        send_to_printer(printer_name, pdf_path)
-
-    except json.JSONDecodeError as e:
-        print(f"Error decoding JSON: {e}")
     except Exception as e:
         print(f"Error handling message: {e}")
 
-
 def generate_pdf(title, message):
-    """Generate a PDF optimized for thermal receipt printers."""
     try:
-        # Fixed page width; height is dynamic
-        page_width = 80 * mm  # 80mm in points
-        margin = 5 * mm  # Margins for the receipt
-        content_width = page_width - (2 * margin)
-
-        # Split message into lines
+        page_width = 80 * mm
+        margin = 5 * mm
+        line_height = 12
         lines = message.split('\n')
-        line_height = 12  # Line height in points
-        
-        # Calculate the required height for the content
-        calculated_height = margin + (len(lines) + 3) * line_height  # Extra lines for title and footer
-
-        # **FIX:** Ensure the page height is always greater than the width for portrait orientation
-        page_height = max(calculated_height, page_width + 1)
+        calculated_height = margin + (len(lines) + 4) * line_height
+        page_height = max(calculated_height, 100 * mm)
 
         pdf_path = "/tmp/print_job.pdf"
         c = canvas.Canvas(pdf_path, pagesize=(page_width, page_height))
-
-        # We need to start drawing from the top of the page
         y = page_height - margin
         
-        # Title Section
         c.setFont("Helvetica-Bold", 12)
         c.drawString(margin, y, title)
-
-        # Divider
         y -= line_height
         c.line(margin, y, page_width - margin, y)
-
-        # Message Section
         y -= line_height
+        
         c.setFont("Helvetica", 10)
         for line in lines:
             c.drawString(margin, y, line)
             y -= line_height
 
-        # Footer Section
-        c.setFont("Helvetica-Oblique", 8)
-        c.drawString(margin, y - line_height, "Generated by PrintMQTTify")
-
         c.save()
-        print(f"PDF saved to {pdf_path}")
         return pdf_path
     except Exception as e:
-        print(f"Error generating PDF: {e}")
+        print(f"PDF Error: {e}")
         return None
 
-
 def send_to_printer(printer_name, pdf_path):
-    """Send the generated PDF to the printer."""
     try:
-        result = subprocess.run(
-            ["lp", "-d", printer_name, pdf_path],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=True
-        )
-        print(f"Printed successfully: {result.stdout.decode()}")
-    except subprocess.CalledProcessError as e:
-        print(f"Failed to print. Error: {e.stderr.decode()}")
-
+        subprocess.run(["lp", "-d", printer_name, pdf_path], check=True)
+        print(f"Sent to {printer_name} successfully.")
+    except Exception as e:
+        print(f"Printing failed: {e}")
 
 if __name__ == "__main__":
-    # Create an MQTT client instance
-    client = mqtt.Client(protocol=mqtt.MQTTv311)
-
-    # Set username and password if provided
+    client = mqtt.Client()
     if username and password:
         client.username_pw_set(username, password)
-
-    # Assign callback functions
     client.on_connect = on_connect
     client.on_message = on_message
-
-    # Connect to the broker
-    try:
-        client.connect(broker, 1883, 60)
-        # Start the MQTT loop
-        client.loop_forever()
-    except Exception as e:
-        print(f"Failed to start MQTT handler: {e}")
+    client.connect(broker, 1883, 60)
+    client.loop_forever()

@@ -26,6 +26,21 @@ else
   echo "Admin user already exists."
 fi
 
+# Install custom drivers from the mapped volume
+CUSTOM_DRIVER_DIR="/drivers/custom"
+if [ -d "$CUSTOM_DRIVER_DIR" ]; then
+  echo "Checking for custom drivers in $CUSTOM_DRIVER_DIR..."
+  for f in "$CUSTOM_DRIVER_DIR"/*.deb; do
+    [ -e "$f" ] && echo "Installing $f..." && dpkg -i "$f"
+  done
+  for f in "$CUSTOM_DRIVER_DIR"/*.tar.gz; do
+    if [ -e "$f" ]; then
+       echo "Extracting and installing $f..."
+       tar -zxvf "$f" -C /tmp/ && /tmp/*/setup.sh # Assuming a standard setup.sh
+    fi
+  done
+fi
+
 # Start Avahi Daemon
 echo "Starting Avahi Daemon..."
 service avahi-daemon start

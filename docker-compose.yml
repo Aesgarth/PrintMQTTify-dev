@@ -8,7 +8,10 @@ services:
       - "8080:8080" # Map PrintMQTTify configuration page port
     devices:
       - "/dev/usb/lp0:/dev/usb/lp0"  # Map USB printer This needs to be configured to match your printers USB connection
+    volumes:
+      - ./custom_drivers:/drivers/custom
     environment:
+      - HA_DISCOVERY=true # Enable HA MQTT Discovery
       - MQTT_BROKER=192.168.0.71  # Replace with actual MQTT broker IP. If using the Mosquitto add-on in Home Assistant this is probably your Home Assistant IP
       - MQTT_USERNAME=mqtt-username 
       - MQTT_PASSWORD=password
