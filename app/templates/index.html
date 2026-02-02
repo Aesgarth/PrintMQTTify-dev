@@ -1,21 +1,138 @@
-<h2>Home Assistant Integration</h2>
-<label class="switch">
-    <input type="checkbox" id="ha-toggle" {% if ha_status == 'true' %}checked{% endif %}>
-    Enable HA Auto-Discovery
-</label>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PrintMQTTify Admin Panel</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 20px; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; background-color: #f4f7f6; }
+        h1 { color: #2c3e50; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        h2 { font-size: 1.2rem; margin-top: 0; color: #2c3e50; }
+        h3 { font-size: 1rem; margin-bottom: 10px; }
+        .section { background: white; border: 1px solid #ddd; padding: 20px; margin-bottom: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        label { display: block; margin-top: 15px; font-weight: bold; font-size: 0.9rem; }
+        input[type="text"], input[type="password"] { width: 100%; padding: 10px; margin-top: 5px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        .checkbox-container { margin-top: 20px; padding: 10px; background: #e9ecef; border-radius: 4px; display: flex; align-items: center; }
+        .checkbox-container input { margin-right: 10px; width: 18px; height: 18px; }
+        button { margin-top: 20px; padding: 10px 20px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 4px; font-weight: bold; transition: background 0.2s; }
+        button:hover { background: #0056b3; }
+        .refresh-btn { background: #6c757d; font-size: 0.8rem; margin-top: 0; margin-bottom: 15px; }
+        ul { list-style: none; padding: 0; margin: 0; }
+        li { padding: 8px 12px; border-bottom: 1px solid #eee; font-family: monospace; font-size: 0.85rem; }
+        li:last-child { border-bottom: none; }
+        .status-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.75rem; font-weight: bold; margin-left: 10px; }
+        .online { background: #d4edda; color: #155724; }
+        .offline { background: #f8d7da; color: #721c24; }
+        #driver-filter { margin-bottom: 10px; padding: 6px; width: 100%; border: 1px solid #ddd; border-radius: 4px; }
+        .scroll-list { max-height: 200px; overflow-y: auto; border: 1px solid #eee; border-radius: 4px; }
+    </style>
+</head>
+<body>
 
-<script>
-    document.getElementById('ha-toggle').addEventListener('change', async (e) => {
-        const enabled = e.target.checked;
-        const formData = new FormData();
-        formData.append('enabled', enabled);
+    <h1>PrintMQTTify Admin Panel</h1>
+
+    <div class="section">
+        <h2>Configuration</h2>
+        <form id="settings-form">
+            <label>MQTT Broker:</label>
+            <input type="text" name="mqtt_broker" value="{{ mqtt_broker }}" placeholder="e.g., 192.168.1.100">
+            
+            <label>MQTT Topic:</label>
+            <input type="text" name="mqtt_topic" value="{{ mqtt_topic }}">
+
+            <label>CUPS Admin User:</label>
+            <input type="text" value="{{ cups_user }}" disabled style="background-color: #f8f9fa;">
+
+            <div class="checkbox-container">
+                <input type="checkbox" name="ha_discovery" id="ha_discovery" {% if ha_status == 'true' %}checked{% endif %}>
+                <label for="ha_discovery" style="margin-top:0;">Enable Home Assistant Auto-Discovery</label>
+            </div>
+
+            <button type="submit">Save and Apply Settings</button>
+        </form>
+    </div>
+
+    <div class="section">
+        <h2>System Status</h2>
+        <button id="refresh-status" class="refresh-btn">Refresh Status Now</button>
         
-        const response = await fetch('/toggle-ha', { method: 'POST', body: formData });
-        const result = await response.json();
-        if (result.success) {
-            alert("Home Assistant entities " + (enabled ? "enabled" : "removed"));
-        } else {
-            alert("Error: " + result.error);
-        }
-    });
-</script>
+        <h3>Installed Printers</h3>
+        <ul id="printer-list" style="margin-bottom: 20px;">
+            <li>Loading printer status...</li>
+        </ul>
+
+        <h3>Available Drivers (Models)</h3>
+        <input type="text" id="driver-filter" placeholder="Filter drivers (e.g. 'sewoo')...">
+        <div class="scroll-list">
+            <ul id="driver-list">
+                <li>Loading driver list...</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        // Handle Settings Update
+        document.getElementById('settings-form').onsubmit = async (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            try {
+                const res = await fetch('/update-settings', { method: 'POST', body: formData });
+                const data = await res.json();
+                if (data.success) {
+                    alert("Success: " + data.message);
+                } else {
+                    alert("Error: " + data.error);
+                }
+            } catch (err) {
+                alert("Failed to connect to server.");
+            }
+        };
+
+        // Local Filter for Drivers
+        document.getElementById('driver-filter').oninput = (e) => {
+            const filter = e.target.value.toLowerCase();
+            const items = document.querySelectorAll('#driver-list li');
+            items.forEach(item => {
+                const text = item.textContent.toLowerCase();
+                item.style.display = text.includes(filter) ? '' : 'none';
+            });
+        };
+
+        // Update UI with Status Data
+        const updateStatus = async () => {
+            try {
+                const res = await fetch('/status');
+                const data = await res.json();
+                
+                // Update Printers
+                const pList = document.getElementById('printer-list');
+                if (data.printers && data.printers.length > 0) {
+                    pList.innerHTML = data.printers.map(p => {
+                        const isOnline = p.toLowerCase().includes('idle') || p.toLowerCase().includes('printing');
+                        const badgeClass = isOnline ? 'online' : 'offline';
+                        const badgeText = isOnline ? 'Ready' : 'Check Printer';
+                        return `<li>${p} <span class="status-badge ${badgeClass}">${badgeText}</span></li>`;
+                    }).join('');
+                } else {
+                    pList.innerHTML = '<li>No printers found in CUPS.</li>';
+                }
+
+                // Update Drivers
+                const dList = document.getElementById('driver-list');
+                if (data.drivers && data.drivers.length > 0) {
+                    dList.innerHTML = data.drivers.map(d => `<li>${d}</li>`).join('');
+                } else {
+                    dList.innerHTML = '<li>No drivers found. Check /drivers/custom volume.</li>';
+                }
+            } catch (err) {
+                console.error("Status update failed", err);
+            }
+        };
+
+        document.getElementById('refresh-status').onclick = updateStatus;
+        
+        // Initial load
+        updateStatus();
+    </script>
+</body>
+</html>
