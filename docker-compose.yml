@@ -4,13 +4,15 @@ services:
     container_name: printmqttify_container
     privileged: true
     ports:
-      - "${CUPS_PORT:-631}:631"
-      - "${WEB_PORT:-8080}:8080"
+      - "${CUPS_PORT:-1631}:631"
+      - "${WEB_PORT:-8880}:8080"
     devices:
       - "${PRINTER_DEVICE}:${PRINTER_DEVICE}"
     volumes:
       - "${DRIVERS_PATH}:/drivers/custom"
-      - "${CUPS_PATH}:/etc/cups"
+      - ./cups_config:/etc/cups
+      # Required for Avahi/mDNS to work properly
+      - /var/run/dbus:/var/run/dbus
     environment:
       - HA_DISCOVERY=${HA_DISCOVERY}
       - MQTT_BROKER=${MQTT_BROKER}
