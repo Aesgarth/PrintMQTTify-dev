@@ -15,7 +15,6 @@ password = os.getenv("MQTT_PASSWORD")
 topic = os.getenv("MQTT_TOPIC", "printer/commands")
 ha_discovery_enabled = os.getenv("HA_DISCOVERY", "true").lower() == "true"
 
-# Discovery Constants
 DISCOVERY_PREFIX = "homeassistant"
 DEVICE_ID = "printmqttify_bridge"
 
@@ -24,10 +23,13 @@ def get_installed_printers():
     printers = []
     try:
         result = subprocess.run(["lpstat", "-p"], stdout=subprocess.PIPE, text=True)
-        # Regex to find printer name and status
-        matches = re.findall(r"printer\s+(.+?)\s+(is\s+idle|is\s+disabled|now\s+printing)", result.stdout)
+        # Refined regex to handle different lpstat output formats
+        matches = re.findall(r"printer\s+([\w\-\_]+)\s+(is\s+idle|is\s+disabled|now\s+printing|is\s+paused)", result.stdout)
         for name, state in matches:
-            status = "online" if "idle" in state or "printing" in state else "offline"
+            if "disabled" in state or "paused" in state:
+                status = "offline"
+            else:
+                status = "online"
             printers.append({"name": name, "status": status})
     except Exception as e:
         print(f"Error parsing printers: {e}")
@@ -39,23 +41,23 @@ def publish_ha_discovery(client):
         "identifiers": [DEVICE_ID],
         "name": "PrintMQTTify",
         "model": "Thermal Printer Bridge",
-        "manufacturer": "PrintMQTTify"
+        "manufacturer": "PrintMQTTify",
+        "sw_version": "1.1.0"
     }
 
-    # 1. Global Service Status (Container is running)
+    # 1. Global Service Status
     bridge_config = {
-        "name": "PrintMQTTify Service",
+        "name": "Service Status",
         "state_topic": "printer/service/status",
         "unique_id": f"{DEVICE_ID}_service",
         "device": device_info,
         "icon": "mdi:server-network"
     }
     client.publish(f"{DISCOVERY_PREFIX}/sensor/{DEVICE_ID}/service/config", json.dumps(bridge_config), retain=True)
-    client.publish("printer/service/status", "online", retain=True)
 
-    # 2. Text Entity for Notifications
+    # 2. Text Entity for Printing
     text_config = {
-        "name": "Send Message to Printer",
+        "name": "Print Text",
         "command_topic": topic,
         "unique_id": f"{DEVICE_ID}_notify",
         "device": device_info,
@@ -75,14 +77,13 @@ def publish_ha_discovery(client):
         }
         client.publish(f"{DISCOVERY_PREFIX}/sensor/{DEVICE_ID}/{safe_name}/config", json.dumps(p_config), retain=True)
     
+    client.publish("printer/service/status", "online", retain=True)
     print("HA Discovery payloads published.")
 
 def remove_ha_discovery(client):
-    """Sends empty payloads to remove all potential entities from HA."""
+    """Sends empty payloads to remove entities from HA."""
     client.publish(f"{DISCOVERY_PREFIX}/sensor/{DEVICE_ID}/service/config", "", retain=True)
     client.publish(f"{DISCOVERY_PREFIX}/text/{DEVICE_ID}/notify/config", "", retain=True)
-    # Note: Specific printer entities are harder to clear without a list, 
-    # but clearing the device ID helps.
     print("HA Discovery payloads cleared.")
 
 def monitor_printers(client, interval=30):
@@ -90,9 +91,6 @@ def monitor_printers(client, interval=30):
     def run():
         while True:
             printers = get_installed_printers()
-            if not printers:
-                # If no printers installed, we stay 'online' as a service but have no printer entities
-                client.publish("printer/service/status", "online", retain=True)
             for p in printers:
                 safe_name = p['name'].replace(" ", "_").lower()
                 client.publish(f"printer/{safe_name}/status", p['status'], qos=1, retain=True)
@@ -128,12 +126,10 @@ def on_message(client, userdata, msg):
             title = data.get("title", "MQTT Notification")
             msg_text = data.get("message", "No content")
         except:
-            # Simple text from HA
             p_name = None
-            title = "HA Notification"
+            title = "PrintMQTTify Job"
             msg_text = payload_str
 
-        # If no printer specified, try to find the first idle one
         if not p_name:
             available = get_installed_printers()
             p_name = available[0]['name'] if available else None
@@ -151,29 +147,47 @@ def generate_pdf(title, message):
         margin = 5 * mm
         line_height = 12
         lines = message.split('\n')
+        # Dynamic height based on content
         page_height = max((len(lines) + 5) * line_height, 60 * mm)
         path = "/tmp/print_job.pdf"
         c = canvas.Canvas(path, pagesize=(page_width, page_height))
+        
         y = page_height - margin
-        c.setFont("Helvetica-Bold", 12)
+        c.setFont("Helvetica-Bold", 14)
         c.drawString(margin, y, title)
         y -= line_height
         c.line(margin, y, page_width-margin, y)
-        y -= line_height
-        c.setFont("Helvetica", 10)
+        y -= (line_height + 5)
+        
+        c.setFont("Helvetica", 11)
         for line in lines:
+            if y < margin: # Basic page break handling
+                c.showPage()
+                y = page_height - margin
+                c.setFont("Helvetica", 11)
             c.drawString(margin, y, line)
             y -= line_height
         c.save()
         return path
-    except:
+    except Exception as e:
+        print(f"PDF Gen Error: {e}")
         return None
 
 if __name__ == "__main__":
-    client = mqtt.Client()
+    client = mqtt.Client(client_id=DEVICE_ID)
     if username and password:
         client.username_pw_set(username, password)
+    
+    # Set Last Will to 'offline'
+    client.will_set("printer/service/status", "offline", retain=True)
+    
     client.on_connect = on_connect
     client.on_message = on_message
-    client.connect(broker, 1883, 60)
-    client.loop_forever()
+    
+    while True:
+        try:
+            client.connect(broker, 1883, 60)
+            client.loop_forever()
+        except Exception as e:
+            print(f"Connection failed, retrying in 10s: {e}")
+            time.sleep(10)
