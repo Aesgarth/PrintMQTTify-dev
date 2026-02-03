@@ -1,0 +1,9 @@
+# Ignore environment variables
+.env
+
+# Ignore CUPS local configuration (if you don't want to sync it)
+cups_config/
+
+# Ignore python cache
+__pycache__/
+*.py[cod]
