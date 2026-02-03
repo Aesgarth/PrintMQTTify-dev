@@ -70,6 +70,17 @@ service avahi-daemon start
 echo "Stopping any stale CUPS instances..."
 pkill cupsd || true
 
+mkdir -p /etc/cups/ssl
+chmod 700 /etc/cups/ssl
+
+if [ ! -f /etc/cups/ssl/server.crt ]; then
+    make-ssl-cert generate-default-snakeoil --force-overwrite
+    cp /etc/ssl/certs/ssl-cert-snakeoil.pem /etc/cups/ssl/localhost.crt
+    cp /etc/ssl/private/ssl-cert-snakeoil.key /etc/cups/ssl/localhost.key
+    chown root:lp /etc/cups/ssl/localhost.key
+    chmod 600 /etc/cups/ssl/localhost.key
+fi
+
 echo "Starting CUPS service..."
 service cups start
 if [ $? -eq 0 ]; then

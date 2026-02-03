@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y \
     libfreetype6 \
     liblcms2-2 \
     libjpeg62-turbo \
+    ssl-cert \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 ENV APP_DIR=/app
