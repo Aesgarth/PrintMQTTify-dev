@@ -4,6 +4,7 @@ FROM debian:bullseye
 # Install necessary packages including DBUS and ReportLab dependencies
 RUN apt-get update && apt-get install -y \
     cups \
+    cups-pdf \
     cups-client \
     python3 \
     python3-pip \
