@@ -15,12 +15,11 @@ RUN apt-get update && apt-get install -y \
     libjpeg62-turbo \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Expose the CUPS web interface
-EXPOSE 631
-
 # Set environment variables
-ENV CUPS_CONF_DIR=/etc/cups \
-    APP_DIR=/app
+ENV APP_DIR=/app
+# Create the directory explicitly before setting WORKDIR
+RUN mkdir -p $APP_DIR
+WORKDIR $APP_DIR
 
 # Copy configurations and scripts
 COPY configs/cupsd.conf $APP_DIR/cupsd.conf
@@ -37,6 +36,7 @@ RUN pip3 install paho-mqtt flask reportlab
 COPY app/printer_mqtt_handler.py $APP_DIR/printer_mqtt_handler.py
 COPY app/web_control_panel.py $APP_DIR/web_control_panel.py
 
-WORKDIR $APP_DIR
+# Expose the CUPS web interface and Flask port
+EXPOSE 631 8080
 
 ENTRYPOINT ["/app/entrypoint.sh"]
