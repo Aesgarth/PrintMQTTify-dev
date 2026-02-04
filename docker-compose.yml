@@ -10,7 +10,7 @@ services:
       - "${PRINTER_DEVICE}:${PRINTER_DEVICE}"
     volumes:
       - "${DRIVERS_PATH}:/drivers/custom"
-      - ./cups_config:/etc/cups
+      - "${CUPS_PATH}:/etc/cups"
       # Required for Avahi/mDNS to work properly
       - /var/run/dbus:/var/run/dbus
     environment:
